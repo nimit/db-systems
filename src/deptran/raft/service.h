@@ -12,34 +12,39 @@
 #include "macros.h"
 
 class SimpleCommand;
-namespace janus {
+namespace janus
+{
 
-class TxLogServer;
-class RaftServer;
-class RaftServiceImpl : public RaftService {
- public:
-  RaftServer* svr_;
-  RaftServiceImpl(TxLogServer* sched);
+  class TxLogServer;
+  class RaftServer;
+  class RaftServiceImpl : public RaftService
+  {
+  public:
+    RaftServer *svr_;
+    RaftServiceImpl(TxLogServer *sched);
 
-  RpcHandler(RequestVote, 4,
-             const uint64_t&, arg1,
-             const uint64_t&, arg2,
-             uint64_t*, ret1,
-             bool_t*, vote_granted) {
-    *ret1 = 0;
-    *vote_granted = false;
-  }
+    RpcHandler(RequestVote, 3,
+               const ServerState &, props,
+               //  const uint64_t&, arg1,
+               //  const uint64_t&, arg2,
+               uint64_t *, ret1,
+               bool_t *, vote_granted)
+    {
+      *ret1 = 0;
+      *vote_granted = false;
+    }
 
-  RpcHandler(AppendEntries, 2,
-             const MarshallDeputy&, cmd,
-             bool_t*, followerAppendOK) {
-    *followerAppendOK = false;
-  }
+    RpcHandler(AppendEntries, 2,
+               const MarshallDeputy &, cmd,
+               bool_t *, followerAppendOK)
+    {
+      *followerAppendOK = false;
+    }
 
-  RpcHandler(HelloRpc, 2, const string&, req, string*, res) {
-    *res = "error"; 
+    RpcHandler(HelloRpc, 2, const string &, req, string *, res)
+    {
+      *res = "error";
+    };
   };
-
-};
 
 } // namespace janus

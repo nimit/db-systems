@@ -3,38 +3,39 @@
 #include "../__dep__.h"
 #include "../constants.h"
 #include "../communicator.h"
+#include "raft_rpc.h"
 
-namespace janus {
+namespace janus
+{
+  class TxData;
 
-class TxData;
+  class RaftCommo : public Communicator
+  {
 
-class RaftCommo : public Communicator {
+  public:
+    RaftCommo() = delete;
+    RaftCommo(PollMgr *);
 
- public:
-  RaftCommo() = delete;
-  RaftCommo(PollMgr*);
-
-  void SendRequestVote(parid_t par_id,
-                       siteid_t site_id,
-                       uint64_t arg1,
-                       uint64_t arg2);
-
-  void SendAppendEntries(parid_t par_id,
+    void SendRequestVote(parid_t par_id,
                          siteid_t site_id,
-                         shared_ptr<Marshallable> cmd);
+                         ServerState props);
 
-  shared_ptr<IntEvent> 
-  SendString(parid_t par_id, siteid_t site_id, const string& msg, string* res);
+    void SendAppendEntries(parid_t par_id,
+                           siteid_t site_id,
+                           shared_ptr<Marshallable> cmd);
 
-  /* Do not modify this class below here */
+    shared_ptr<IntEvent>
+    SendString(parid_t par_id, siteid_t site_id, const string &msg, string *res);
 
-  friend class FpgaRaftProxy;
- public:
+    /* Do not modify this class below here */
+
+    friend class FpgaRaftProxy;
+
+  public:
 #ifdef RAFT_TEST_CORO
-  std::recursive_mutex rpc_mtx_ = {};
-  uint64_t rpc_count_ = 0;
+    std::recursive_mutex rpc_mtx_ = {};
+    uint64_t rpc_count_ = 0;
 #endif
-};
+  };
 
 } // namespace janus
-

@@ -1,0 +1,58 @@
+src/deptran/raft -> raft stuff
+src/rrr -> reusable runtime (rpc, reactor/coroutine, events)
+
+RRR framework
+define service interface in .rpc file
+(src/deptran/raft/raft_rpc.rpc)
+
+primitive types: i32, i64, double, string
+container types: vector<T>, map<K, V>, set<T>
+custom types (?) -> structs are possible
+
+./bin/rpcgen --cpp raft_rpc.rpc
+
+RRR framework
+
+Define functions as fast/defer
+fast -> quick, non-blocking RPC (e.g., __reset__wrapper__)
+defer -> async, heavier and blocking task (would be executed in one coroutine) (e.g., __increment__wrapper__)
+
+Use defer as much as possible
+
+rrr::PollMgr* poll = new rr::PollMgr(1) -> Continuously checks for new tasks to perform
+ThreadPool -> (initialize same as pollmgr) Actually executes the command
+Server -> Initialize with objects of PollMgr and ThreadPool
+
+PollMgr -> important!!!
+
+RRR Client side
+
+Start by
+initializing PollMgr
+initializing Client object using PollMgr object
+
+Don't forget cleanup....
+delete poll
+client->clean_and_release()
+
+Always use async version
+Use proxy to trigger RPCs
+
+proxy(client) -> To create client
+
+(See photos of slides on phone)
+
+COROUTINES (rrr/reactor/{coroutine.h, coroutine.cc})
+- Built on top of Boost (popular C++ library)
+- Stateful (yielding will not lead to local info being lost)
+
+STATE transition happens via events (see pic)
+
+
+Very useful abstraction -> QuorumEvent
+Can also look at the paper (see pic)
+Other projects - Paxos and Copilot have this already implemented (CopilotCommo::BroadcastFastAccept). Can implement the same in Raft.
+
+Use existing events from Reactor
+
+polling thread (start_poll_loop) is similar to how the epoll library is used

@@ -1,8 +1,15 @@
 namespace janus;
 
+struct ServerState
+  {
+    parid_t par_id;
+    uint64_t term;
+    uint64_t lastLogIndex;
+    uint64_t lastLogTerm;
+  };
+
 abstract service Raft {
-  defer RequestVote(uint64_t arg1,
-                    uint64_t arg2 |
+  defer RequestVote(ServerState props |
                     uint64_t ret1,
                     bool_t vote_granted);
 
