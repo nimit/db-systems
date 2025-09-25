@@ -56,3 +56,6 @@ Other projects - Paxos and Copilot have this already implemented (CopilotCommo::
 Use existing events from Reactor
 
 polling thread (start_poll_loop) is similar to how the epoll library is used
+
+IMPORTANT:
+THIS LAB USES A STACKFUL COROUTINE.

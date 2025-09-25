@@ -18,6 +18,8 @@ namespace janus
   class TxLogServer;
   class RaftServer;
   class RaftServiceImpl : public RaftService
+  // usage: RpcHandler(RPC_NAME, N_PARAMS, PARAMS...) { DEFAULTLOGIC }
+  // TODO: These defaults are sensible but the default logic should be handled in receiver functions.
   {
   public:
     RaftServer *svr_;
@@ -25,13 +27,15 @@ namespace janus
 
     RpcHandler(RequestVote, 3,
                const ServerState &, props,
-               //  const uint64_t&, arg1,
-               //  const uint64_t&, arg2,
                uint64_t *, ret1,
                bool_t *, vote_granted)
     {
       *ret1 = 0;
       *vote_granted = false;
+    }
+
+    RpcHandler(EmptyAppendEntries, 1, const ServerState &, props)
+    {
     }
 
     RpcHandler(AppendEntries, 2,

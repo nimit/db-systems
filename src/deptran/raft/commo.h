@@ -16,13 +16,12 @@ namespace janus
     RaftCommo() = delete;
     RaftCommo(PollMgr *);
 
-    void SendRequestVote(parid_t par_id,
-                         siteid_t site_id,
-                         ServerState props);
+    void SendRequestVote(parid_t par_id, ServerState props, shared_ptr<QuorumEvent> quorumEvent);
 
     void SendAppendEntries(parid_t par_id,
                            siteid_t site_id,
                            shared_ptr<Marshallable> cmd);
+    void SendEmptyAppendEntries(parid_t par_id, ServerState props);
 
     shared_ptr<IntEvent>
     SendString(parid_t par_id, siteid_t site_id, const string &msg, string *res);

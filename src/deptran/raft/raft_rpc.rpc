@@ -2,7 +2,7 @@ namespace janus;
 
 struct ServerState
   {
-    parid_t par_id;
+    uint32_t serverId;
     uint64_t term;
     uint64_t lastLogIndex;
     uint64_t lastLogTerm;
@@ -15,7 +15,7 @@ abstract service Raft {
 
   defer AppendEntries(MarshallDeputy cmd |
                       bool_t followerAppendOK);
-  defer HelloRpc(string req | string res);                       
-
+  defer EmptyAppendEntries(ServerState props);
+  defer HelloRpc(string req | string res);
 }
 
