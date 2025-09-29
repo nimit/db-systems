@@ -17,14 +17,11 @@ namespace janus
     RaftCommo(PollMgr *);
 
     void SendRequestVote(parid_t par_id, ServerState props, shared_ptr<QuorumEvent> quorumEvent);
+    void SendEmptyAppendEntries(parid_t par_id, siteid_t site_id, ServerState props);
+    void SendAppendEntries(parid_t par_id, siteid_t site_id, shared_ptr<Marshallable> cmd, uint64_t index, uint64_t term, ServerState props,
+                           std::recursive_mutex *mtx, std::vector<uint64_t> *nextIndex, std::vector<uint64_t> *matchIndex);
 
-    void SendAppendEntries(parid_t par_id,
-                           siteid_t site_id,
-                           shared_ptr<Marshallable> cmd);
-    void SendEmptyAppendEntries(parid_t par_id, ServerState props);
-
-    shared_ptr<IntEvent>
-    SendString(parid_t par_id, siteid_t site_id, const string &msg, string *res);
+    shared_ptr<IntEvent> SendString(parid_t par_id, siteid_t site_id, const string &msg, string *res);
 
     /* Do not modify this class below here */
 

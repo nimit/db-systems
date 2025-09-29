@@ -38,10 +38,15 @@ namespace janus
     {
     }
 
-    RpcHandler(AppendEntries, 2,
+    RpcHandler(AppendEntries, 6,
                const MarshallDeputy &, cmd,
+               const uint64_t &, index,
+               const uint64_t &, term,
+               const ServerState &, props,
+               uint64_t *, followerTerm,
                bool_t *, followerAppendOK)
     {
+      *followerTerm = -1;
       *followerAppendOK = false;
     }
 

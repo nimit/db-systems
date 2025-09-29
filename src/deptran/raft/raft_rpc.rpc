@@ -1,20 +1,18 @@
 namespace janus;
 
 struct ServerState
-  {
-    uint32_t serverId;
-    uint64_t term;
-    uint64_t lastLogIndex;
-    uint64_t lastLogTerm;
-  };
+{
+  uint32_t serverId;
+  uint64_t term;
+  uint64_t lastLogIndex;
+  uint64_t lastLogTerm;
+  uint64_t leaderCommit;
+};
 
-abstract service Raft {
-  defer RequestVote(ServerState props |
-                    uint64_t ret1,
-                    bool_t vote_granted);
-
-  defer AppendEntries(MarshallDeputy cmd |
-                      bool_t followerAppendOK);
+abstract service Raft
+{
+  defer RequestVote(ServerState props | uint64_t ret1, bool_t vote_granted);
+  defer AppendEntries(MarshallDeputy cmd, uint64_t index, uint64_t term, ServerState props | uint64_t followerTerm, bool_t followerAppendOK);
   defer EmptyAppendEntries(ServerState props);
   defer HelloRpc(string req | string res);
 }

@@ -32,11 +32,13 @@ namespace janus
     defer->reply();
   }
 
-  void RaftServiceImpl::HandleAppendEntries(const MarshallDeputy &md_cmd, bool_t *followerAppendOK, rrr::DeferredReply *defer)
+  void RaftServiceImpl::HandleAppendEntries(const MarshallDeputy &md_cmd, const uint64_t &index, const uint64_t &term, const ServerState &props, uint64_t *followerTerm, bool_t *followerAppendOK, rrr::DeferredReply *defer)
   {
     /* Your code here */
     std::shared_ptr<Marshallable> cmd = const_cast<MarshallDeputy &>(md_cmd).sp_data_;
-    *followerAppendOK = false;
+    auto result = svr_->ReceiveEntry(cmd, index, term, (ServerState *)&props);
+    *followerTerm = result.first;
+    *followerAppendOK = result.second;
     defer->reply();
   }
 

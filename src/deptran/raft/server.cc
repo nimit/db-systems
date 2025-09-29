@@ -119,16 +119,62 @@ namespace janus
   void RaftServer::InitiateLeader()
   {
     Log_info("[%d] Becoming leader for term %lu at time %lu", loc_id_, currentTerm, GetTime());
+    std::vector<janus::SiteProxyPair> proxies = commo()->rpc_par_proxies_[partition_id_];
+
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
     votedFor = -1;
     state = LEADER;
+    nextIndex = std::vector<uint64_t>(proxies.size(), log.size() + 1);
+    matchIndex = std::vector<uint64_t>(proxies.size(), 0);
+    std::lock_guard<std::recursive_mutex> unlock(mtx_);
+
+    auto props = GetServerState();
     rrr::Coroutine::CreateRun(
-        [this]()
+        [this, proxies, props]()
         {
           while (state == LEADER && !serverShutdown)
           {
+            int matchServers = 0;
+            matchIndex[loc_id_] = log.size();
+            // we don't care about nextIndex because it is skipped (when sending entries, leader skips self)
+
+            for (auto &m : matchIndex)
+            {
+              if (m > commitIndex)
+              {
+                matchServers += 1;
+              }
+            }
+            if (matchServers > (proxies.size() / 2) && commitIndex < log.size())
+            {
+              commitIndex += 1;
+              auto entry = log[commitIndex - 1];
+              app_next_(*entry.second);
+              lastApplied += 1;
+              Log_info("[%d] (LEADER) | Updated commitIndex to %lu at time %lu", loc_id_, commitIndex, GetTime());
+            }
+
             auto timeout = Reactor::CreateSpEvent<TimeoutEvent>(HEARTBEAT_INTERVAL);
-            commo()->SendEmptyAppendEntries(partition_id_, GetServerState());
-            Log_info("[%d] Sent heartbeats at time %lu", loc_id_, GetTime());
+            for (auto &p : proxies)
+            {
+              if (p.first == loc_id_)
+              {
+                continue; // skip sending to self
+              }
+              if (props.lastLogIndex >= nextIndex[p.first])
+              {
+                auto logIndex = nextIndex[p.first];
+                auto entry = log.at(logIndex);
+                auto logTerm = entry.first;
+                auto cmd = entry.second;
+                commo()->SendAppendEntries(partition_id_, p.first, cmd, logIndex, logTerm, props, &mtx_, &nextIndex, &matchIndex);
+              }
+              else
+              {
+                commo()->SendEmptyAppendEntries(partition_id_, p.first, GetServerState());
+              }
+            }
+            Log_debug("[%d] Sent heartbeats at time %lu", loc_id_, GetTime());
             timeout->Wait();
           }
         });
@@ -141,6 +187,7 @@ namespace janus
     props.serverId = loc_id_;
     props.lastLogIndex = log.size(); // index of last log entry (starts from 1 according to the raft paper)
     props.lastLogTerm = log.empty() ? 0 : log.back().first;
+    props.leaderCommit = commitIndex;
     return props;
   }
 
@@ -157,9 +204,68 @@ namespace janus
     // Log_info("[%d] Received heartbeat from server %d for term %lu at time %lu", loc_id_, props->serverId, props->term, lastHeartbeatTime);
   }
 
-  bool RaftServer::Start(shared_ptr<Marshallable> &cmd,
-                         uint64_t *index,
-                         uint64_t *term)
+  // TODO (optimization): receive multiple entries at once
+  /*
+    term is the log entry's term
+    index is the log entry's index (starts from 1)
+    Right now only sends a single entry (easier to implement and debug)
+  */
+  pair<uint64_t, bool> RaftServer::ReceiveEntry(shared_ptr<Marshallable> &cmd, uint64_t index, uint64_t term, ServerState *props)
+  {
+    Log_info("[%d] RecieveEntry");
+    if (props->term < currentTerm)
+    {
+      Log_info("[%d] RE: Received entry from stale term (%lu < %lu)", loc_id_, props->term, currentTerm);
+      return {currentTerm, false};
+    }
+    lastHeartbeatTime = GetTime();
+    if (props->leaderCommit > commitIndex)
+    {
+      commitIndex = std::min(props->leaderCommit, (uint64_t)log.size());
+      // Apply all entries between lastApplied and commitIndex
+      for (uint64_t i = lastApplied; i < commitIndex; i++)
+      {
+        auto entry = log[i];
+        // Log_info("[%d] RE: Applying log entry at index %lu for term %lu at time %lu", loc_id_, i + 1, entry.first, GetTime());
+        app_next_(*entry.second);
+        lastApplied += 1;
+      }
+      Log_info("[%d] RE: Updated commitIndex to %lu at time %lu", loc_id_, commitIndex, GetTime());
+    }
+
+    auto currentProps = GetServerState();
+    if (currentProps.lastLogIndex == index && currentProps.lastLogTerm == term)
+    {
+      // TODO: handle case where the term and log index match (already appended entry)
+      return {currentTerm, true};
+    }
+    else if (currentProps.lastLogIndex >= index && currentProps.lastLogTerm != term)
+    {
+      // TODO: If conflicting entry (same index, different term), delete that entry and all that follow it
+      // Log inconsistency - delete all entries after lastLogIndex and append new entry
+      log.resize(index - 1);
+      currentProps = GetServerState();
+      if (currentProps.lastLogTerm != props->lastLogTerm)
+      {
+        return {currentTerm, false};
+      }
+      log.push_back({term, cmd});
+      Log_info("[%d] RE: Fixed log inconsistency and appended new log entry at index %lu for term %lu at time %lu", loc_id_, log.size(), props->term, GetTime());
+      return {currentTerm, true};
+    }
+    else if (currentProps.lastLogIndex == index - 1)
+    {
+      log.push_back({term, cmd});
+      Log_info("[%d] RE: Appended new log entry at index %lu for term %lu at time %lu", loc_id_, currentProps.lastLogIndex + 1, props->term, GetTime());
+      return {currentTerm, true};
+    }
+
+    // TODO: Better handling?
+    // Reject entry if log isn't up to date with leader
+    return {currentTerm, false};
+  }
+
+  bool RaftServer::Start(shared_ptr<Marshallable> &cmd, uint64_t *index, uint64_t *term)
   {
     /* Your code here. This function can be called from another OS thread. */
     // *index = 0;
@@ -167,7 +273,13 @@ namespace janus
 
     // Return false if this server is not the leader
     // If server is the leader, append to new log entry
-    return state == LEADER;
+    if (state != LEADER)
+    {
+      return false;
+    }
+    Log_info("[%d] (LEADER_START) | Appending new log entry at index %lu for term %lu at time %lu", loc_id_, log.size(), currentTerm, GetTime());
+    log.push_back({currentTerm, cmd});
+    return true;
   }
 
   void RaftServer::GetState(bool *is_leader, uint64_t *term)

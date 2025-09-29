@@ -24,6 +24,7 @@ namespace janus
   public:
     std::pair<uint64_t, bool> AskVote(ServerState *props);
     void ReceiveHeartbeat(ServerState *props);
+    pair<uint64_t, bool> ReceiveEntry(shared_ptr<Marshallable> &cmd, uint64_t index, uint64_t term, ServerState *props);
 
   private:
     uint64_t lastHeartbeatTime = 0;
