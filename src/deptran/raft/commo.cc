@@ -38,7 +38,7 @@ namespace janus
       {
         continue; // skip self-vote
       }
-      // Log_info("[%d] Sending RequestVote to server %d for term %lu", props.serverId, p.first, props.term);
+      Log_debug("[%d] Sending RequestVote to server %d for term %lu", props.serverId, p.first, props.term);
       RaftProxy *proxy = (RaftProxy *)p.second;
       FutureAttr fuattr;
       fuattr.callback = [quorumEvent](Future *fu)
@@ -66,42 +66,44 @@ namespace janus
     auto proxies = rpc_par_proxies_[par_id];
     for (auto &p : proxies)
     {
-      if (p.first == site_id)
+      if (p.first != site_id)
       {
-        RaftProxy *proxy = (RaftProxy *)p.second;
-        FutureAttr fuattr;
-        fuattr.callback = [site_id, index, props, nextIndex, matchIndex, mtx](Future *fu)
-        {
-          uint64_t followerTerm;
-          bool_t followerAppendOK;
-          fu->get_reply() >> followerTerm;
-          fu->get_reply() >> followerAppendOK;
-
-          if (followerTerm > props.term)
-          {
-            // TODO: Step down as leader
-            Log_info("[SAE] Discovered higher term %lu from follower %d", props.serverId, followerTerm, site_id);
-            return;
-          }
-          std::lock_guard<std::recursive_mutex> lock(*mtx);
-          if (followerAppendOK)
-          {
-            Log_info("[SAE] Appended entry at index %lu for follower %d", props.serverId, index, site_id);
-            (*nextIndex)[site_id] = (*nextIndex)[site_id] + 1;
-            (*matchIndex)[site_id] = index;
-          }
-          else
-          {
-            Log_info("[SAE] Failed to append entry at index %lu for follower %d", props.serverId, index, site_id);
-            (*nextIndex)[site_id] = (*nextIndex)[site_id] - 1;
-            (*matchIndex)[site_id] = index;
-          }
-          std::lock_guard<std::recursive_mutex> unlock(*mtx);
-        };
-        /* wrap Marshallable in a MarshallDeputy to send over RPC */
-        MarshallDeputy md(cmd);
-        Call_Async(proxy, AppendEntries, md, index, term, props, fuattr);
+        continue;
       }
+      RaftProxy *proxy = (RaftProxy *)p.second;
+      FutureAttr fuattr;
+      fuattr.callback = [site_id, index, props, nextIndex, matchIndex, mtx](Future *fu)
+      {
+        uint64_t followerTerm;
+        bool_t followerAppendOK;
+        fu->get_reply() >> followerTerm;
+        fu->get_reply() >> followerAppendOK;
+
+        if (followerTerm > props.term)
+        {
+          // TODO (MAJOR BUG FIX): Step down as leader
+          Log_info("[SAE] Discovered higher term from follower %d (%lu > %lu)", site_id, followerTerm, props.term);
+          return;
+        }
+        mtx->lock();
+        if (followerAppendOK)
+        {
+          Log_info("[SAE] Appended entry at index %lu for follower %d", index, site_id);
+          (*nextIndex)[site_id] = (*nextIndex)[site_id] + 1;
+          (*matchIndex)[site_id] = index;
+        }
+        else
+        {
+          Log_info("[SAE] Failed to append entry at index %lu for follower %d", index, site_id);
+          (*nextIndex)[site_id] = (*nextIndex)[site_id] - 1;
+          (*matchIndex)[site_id] = index;
+        }
+        mtx->unlock();
+      };
+      /* wrap Marshallable in a MarshallDeputy to send over RPC */
+      MarshallDeputy md(cmd);
+      Call_Async(proxy, AppendEntries, md, index, term, props, fuattr);
+      break;
     }
   }
 

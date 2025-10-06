@@ -5,6 +5,7 @@
 #include "../scheduler.h"
 #include "../classic/tpc_command.h"
 #include "commo.h"
+#include <random>
 
 namespace janus
 {
@@ -41,6 +42,13 @@ namespace janus
     //
     ServerState GetServerState();
     void InitiateLeader();
+    bool Verify(ServerState *props);
+    int GetRandomDelayMS(int maxMs)
+    {
+      thread_local static std::mt19937 gen(std::random_device{}());
+      std::uniform_int_distribution<> dist(1e3, maxMs * 1e3);
+      return dist(gen);
+    }
     inline uint64_t GetTime()
     {
       struct timespec curr_time;
@@ -61,7 +69,7 @@ namespace janus
   private:
     bool disconnected_ = false;
     void Setup();
-    void startElection();
+    void StartElection();
 
   public:
     void SyncRpcExample();
