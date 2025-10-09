@@ -14,7 +14,7 @@ namespace janus
   RaftCommo::RaftCommo(PollMgr *poll) : Communicator(poll)
   {
   }
-  void RaftCommo::SendEmptyAppendEntries(parid_t par_id, siteid_t site_id, ServerState props)
+  void RaftCommo::SendEmptyAppendEntries(parid_t par_id, siteid_t site_id, ServerProps props, std::recursive_mutex *mtx, int *state, int *term)
   {
     auto proxies = rpc_par_proxies_[par_id];
     for (auto &p : proxies)
@@ -24,12 +24,27 @@ namespace janus
         continue;
       }
       RaftProxy *proxy = (RaftProxy *)p.second;
-      // FutureAttr fuattr
+      FutureAttr fuattr;
+      fuattr.callback = [site_id, props, mtx, state, term](Future *fu)
+      {
+        uint64_t followerTerm;
+        bool_t followerReceivedHeartbeat;
+        fu->get_reply() >> followerTerm;
+        fu->get_reply() >> followerReceivedHeartbeat;
+        if (followerTerm > props.term)
+        {
+          Log_info("[SEAE] Discovered higher term from follower %d (%lu > %lu)", site_id, followerTerm, props.term);
+          // TODO: STEP DOWN & UPDATE TERM
+          std::lock_guard<std::recursive_mutex> lock(*mtx);
+          *state = 0;
+          *term = followerTerm;
+        }
+      };
       Call_Async(proxy, EmptyAppendEntries, props);
     }
   }
 
-  void RaftCommo::SendRequestVote(parid_t par_id, ServerState props, shared_ptr<QuorumEvent> quorumEvent)
+  void RaftCommo::SendRequestVote(parid_t par_id, ServerProps props, shared_ptr<QuorumEvent> quorumEvent)
   {
     auto proxies = rpc_par_proxies_[par_id];
     for (auto &p : proxies)
@@ -60,8 +75,8 @@ namespace janus
     }
   }
 
-  void RaftCommo::SendAppendEntries(parid_t par_id, siteid_t site_id, shared_ptr<Marshallable> cmd, uint64_t index, uint64_t term, ServerState props,
-                                    std::recursive_mutex *mtx, int *state, std::vector<uint64_t> *nextIndex, std::vector<uint64_t> *matchIndex)
+  void RaftCommo::SendAppendEntries(parid_t par_id, siteid_t site_id, shared_ptr<Marshallable> cmd, uint64_t index, uint64_t term, ServerProps props,
+                                    std::recursive_mutex *mtx, int *state, int *leaderTerm, std::vector<uint64_t> *nextIndex, std::vector<uint64_t> *matchIndex)
   {
     std::lock_guard<std::recursive_mutex> lock(*mtx);
     auto proxies = rpc_par_proxies_[par_id];
@@ -73,7 +88,7 @@ namespace janus
       }
       RaftProxy *proxy = (RaftProxy *)p.second;
       FutureAttr fuattr;
-      fuattr.callback = [site_id, index, props, state, nextIndex, matchIndex, mtx](Future *fu)
+      fuattr.callback = [site_id, index, props, nextIndex, matchIndex, mtx, state, leaderTerm](Future *fu)
       {
         uint64_t followerTerm;
         bool_t followerAppendOK;
@@ -85,7 +100,9 @@ namespace janus
         {
           Log_info("[SAE] Discovered higher term from follower %d (%lu > %lu)", site_id, followerTerm, props.term);
           // TODO (optimization): Find a better way to step down?
-          *state = 0; // TODO (TEST): STEP DOWN TO FOLLOWER
+          // TODO (TEST): STEP DOWN TO FOLLOWER
+          *state = 0;
+          *leaderTerm = followerTerm;
           return;
         }
         if (followerAppendOK)
@@ -99,8 +116,8 @@ namespace janus
           Log_info("[SAE] Failed to append entry at index %lu for follower %d", index, site_id);
           auto lastIndex = (*matchIndex)[site_id];
           auto newIndex = (*nextIndex)[site_id] - 1;
-          (*nextIndex)[site_id] = newIndex <= lastIndex ? lastIndex + 1 : newIndex;
-          (*matchIndex)[site_id] = index;
+          (*nextIndex)[site_id] = newIndex <= 0 ? 1 : newIndex;
+          (*matchIndex)[site_id] = 0;
         }
         mtx->unlock();
       };

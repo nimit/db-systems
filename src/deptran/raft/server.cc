@@ -79,7 +79,7 @@ namespace janus
         [this]()
         {
           std::lock_guard<std::recursive_mutex> lock(mtx_);
-          ServerState props = GetServerState();
+          ServerProps props = GetServerProps();
           int totalServers = commo()->rpc_par_proxies_[partition_id_].size() - 1;
           if (totalServers <= 0)
           {
@@ -140,7 +140,7 @@ namespace janus
     std::vector<janus::SiteProxyPair> proxies = commo()->rpc_par_proxies_[partition_id_];
     votedFor = -1;
     state = LEADER;
-    nextIndex = std::vector<uint64_t>(proxies.size(), log.size() + 1);
+    nextIndex = std::vector<uint64_t>(proxies.size(), std::max((uint64_t)1, log.size()));
     matchIndex = std::vector<uint64_t>(proxies.size(), 0);
     mtx_.unlock();
     Log_info("[%d] InitiateLeader unlocked mtx", loc_id_);
@@ -150,7 +150,7 @@ namespace janus
         {
           while (state == LEADER && !serverShutdown)
           {
-            auto props = GetServerState();
+            auto props = GetServerProps();
             int matchServers = 0;
             matchIndex[loc_id_] = log.size();
             // we don't care about nextIndex because it is skipped (when sending entries, leader skips self)
@@ -189,11 +189,11 @@ namespace janus
                 auto logTerm = entry.first;
                 auto cmd = entry.second;
                 // Log_debug("[%d] (LEADER) | Sent AppendEntries to server %d for logIndex %lu at time %lu", loc_id_, p.first, logIndex, GetTime());
-                commo()->SendAppendEntries(partition_id_, p.first, cmd, logIndex, logTerm, props, &mtx_, (int *)&state, &nextIndex, &matchIndex);
+                commo()->SendAppendEntries(partition_id_, p.first, cmd, logIndex, logTerm, props, &mtx_, (int *)&state, (int *)&currentTerm, &nextIndex, &matchIndex);
               }
               else
               {
-                commo()->SendEmptyAppendEntries(partition_id_, p.first, GetServerState());
+                commo()->SendEmptyAppendEntries(partition_id_, p.first, GetServerProps(), &mtx_, (int *)&state, (int *)&currentTerm);
               }
             }
             // Log_debug("[%d] (LEADER) | Sent heartbeats at time %lu", loc_id_, GetTime());
@@ -202,9 +202,9 @@ namespace janus
         });
   }
 
-  ServerState RaftServer::GetServerState()
+  ServerProps RaftServer::GetServerProps()
   {
-    ServerState props;
+    ServerProps props;
     props.term = currentTerm;
     props.serverId = loc_id_;
     props.lastLogIndex = log.size(); // index of last log entry (starts from 1 according to the raft paper)
@@ -215,7 +215,7 @@ namespace janus
 
   /// This method should be called on every incoming request. Rules according to Raft paper section 5.1
   /// Should return whether to continue serving the request or not
-  bool RaftServer::Verify(ServerState *props)
+  bool RaftServer::Verify(ServerProps *props)
   {
     // Log_debug("[%d] Verify called", loc_id_);
     if (props->term > currentTerm)
@@ -239,7 +239,7 @@ namespace janus
 
   // ReceviveHeartbeat is called when a server receives a heartbeat from another server
   // It is different from Verify only because it sets lastHeartbeatTime. We don't want to set lastHeartbeatTime in AskVote because the server initiating the request is not the leader
-  void RaftServer::ReceiveHeartbeat(ServerState *props)
+  void RaftServer::ReceiveHeartbeat(ServerProps *props)
   {
     // Log_debug("[%d] ReceiveHeartbeat called", loc_id_);
     if (!Verify(props))
@@ -273,7 +273,7 @@ namespace janus
     index is the log entry's index (starts from 1)
     Right now only sends a single entry (easier to implement and debug)
   */
-  pair<uint64_t, bool> RaftServer::ReceiveEntry(shared_ptr<Marshallable> &cmd, uint64_t index, uint64_t term, ServerState *props)
+  pair<uint64_t, bool> RaftServer::ReceiveEntry(shared_ptr<Marshallable> &cmd, uint64_t index, uint64_t term, ServerProps *props)
   {
     // Log_debug("[%d] ReceiveEntry called", loc_id_);
     if (!Verify(props))
@@ -283,7 +283,7 @@ namespace janus
     }
     ReceiveHeartbeat(props);
 
-    auto currentProps = GetServerState();
+    auto currentProps = GetServerProps();
     if (currentProps.lastLogIndex == index && currentProps.lastLogTerm == term)
     {
       // handle case where the term and log index match (already appended entry)
@@ -293,7 +293,7 @@ namespace janus
     {
       // If conflicting entry (same index, different term), delete that entry and all that follow it, then append new entry
       log.resize(index - 1);
-      currentProps = GetServerState();
+      currentProps = GetServerProps();
       if (currentProps.lastLogTerm != props->lastLogTerm)
       {
         return {currentTerm, false};
@@ -344,7 +344,7 @@ namespace janus
     *term = currentTerm;
   }
 
-  std::pair<uint64_t, bool> RaftServer::AskVote(ServerState *props)
+  std::pair<uint64_t, bool> RaftServer::AskVote(ServerProps *props)
   {
     // Log_debug("[%d] Received RequestVote from server %d for term %lu at time %lu", loc_id_, props->serverId, props->term, GetTime());
     if (!Verify(props))
@@ -412,7 +412,6 @@ namespace janus
     if (disconnect)
     {
       verify(_proxies[partition_id_][loc_id_].size() == 0);
-      Log_debug("[%d] COMMO: %p", loc_id_, c);
       verify(c->rpc_par_proxies_.size() > 0);
       auto sz = c->rpc_par_proxies_.size();
       _proxies[partition_id_][loc_id_].insert(c->rpc_par_proxies_.begin(), c->rpc_par_proxies_.end());

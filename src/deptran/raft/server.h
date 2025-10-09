@@ -23,9 +23,9 @@ namespace janus
   class RaftServer : public TxLogServer
   {
   public:
-    std::pair<uint64_t, bool> AskVote(ServerState *props);
-    void ReceiveHeartbeat(ServerState *props);
-    pair<uint64_t, bool> ReceiveEntry(shared_ptr<Marshallable> &cmd, uint64_t index, uint64_t term, ServerState *props);
+    std::pair<uint64_t, bool> AskVote(ServerProps *props);
+    void ReceiveHeartbeat(ServerProps *props);
+    pair<uint64_t, bool> ReceiveEntry(shared_ptr<Marshallable> &cmd, uint64_t index, uint64_t term, ServerProps *props);
 
   private:
     uint64_t lastHeartbeatTime = 0;
@@ -40,9 +40,10 @@ namespace janus
     std::vector<uint64_t> matchIndex;
     std::vector<pair<uint64_t, shared_ptr<Marshallable>>> log;
     //
-    ServerState GetServerState();
+    ServerProps GetServerProps();
+    void StepDown(int term);
     void InitiateLeader();
-    bool Verify(ServerState *props);
+    bool Verify(ServerProps *props);
     int GetRandomDelayMS(int maxMs)
     {
       thread_local static std::mt19937 gen(std::random_device{}());

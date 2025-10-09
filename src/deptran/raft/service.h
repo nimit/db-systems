@@ -26,7 +26,7 @@ namespace janus
     RaftServiceImpl(TxLogServer *sched);
 
     RpcHandler(RequestVote, 3,
-               const ServerState &, props,
+               const ServerProps &, props,
                uint64_t *, ret1,
                bool_t *, vote_granted)
     {
@@ -36,7 +36,7 @@ namespace janus
       *vote_granted = false;
     }
 
-    RpcHandler(EmptyAppendEntries, 1, const ServerState &, props)
+    RpcHandler(EmptyAppendEntries, 1, const ServerProps &, props)
     {
     }
 
@@ -44,7 +44,7 @@ namespace janus
                const MarshallDeputy &, cmd,
                const uint64_t &, index,
                const uint64_t &, term,
-               const ServerState &, props,
+               const ServerProps &, props,
                uint64_t *, followerTerm,
                bool_t *, followerAppendOK)
     {

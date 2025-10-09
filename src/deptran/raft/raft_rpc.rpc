@@ -1,6 +1,6 @@
 namespace janus;
 
-struct ServerState
+struct ServerProps
 {
   uint32_t serverId;
   uint64_t term;
@@ -11,9 +11,9 @@ struct ServerState
 
 abstract service Raft
 {
-  defer RequestVote(ServerState props | uint64_t ret1, bool_t vote_granted);
-  defer AppendEntries(MarshallDeputy cmd, uint64_t index, uint64_t term, ServerState props | uint64_t followerTerm, bool_t followerAppendOK);
-  defer EmptyAppendEntries(ServerState props);
+  defer RequestVote(ServerProps props | uint64_t ret1, bool_t vote_granted);
+  defer AppendEntries(MarshallDeputy cmd, uint64_t index, uint64_t term, ServerProps props | uint64_t followerTerm, bool_t followerAppendOK);
+  defer EmptyAppendEntries(ServerProps props);
   defer HelloRpc(string req | string res);
 }
 
