@@ -41,7 +41,7 @@ namespace janus
     rrr::Coroutine::CreateRun(
         [this]()
         {
-          Log_info("[%d] Started coroutine at time %lu", loc_id_, GetTime());
+          // Log_info("[%d] Started coroutine at time %lu", loc_id_, GetTime());
           while (true)
           {
             if (serverShutdown)
@@ -67,7 +67,8 @@ namespace janus
     {
       return;
     }
-    Log_info("[%d] Election timeout reached (%s), starting election", loc_id_, IsDisconnected() ? "disconnected" : "connected");
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    Log_info("[%d] (%s) starting election", loc_id_, IsDisconnected() ? "disconnected" : "connected");
     // OR BETTER OPTION? When running for elections, dry run and see if server gets elected. Increase the currentTerm after election (but send currentTerm + 1 in RequestVote RPC)
     state = CANDIDATE;
     currentTerm += 1;
@@ -77,6 +78,7 @@ namespace janus
     rrr::Coroutine::CreateRun(
         [this]()
         {
+          std::lock_guard<std::recursive_mutex> lock(mtx_);
           ServerState props = GetServerState();
           int totalServers = commo()->rpc_par_proxies_[partition_id_].size() - 1;
           if (totalServers <= 0)
@@ -132,10 +134,10 @@ namespace janus
   void RaftServer::InitiateLeader()
   {
     Log_info("[%d] Becoming leader for term %lu at time %lu", loc_id_, currentTerm, GetTime());
-    std::vector<janus::SiteProxyPair> proxies = commo()->rpc_par_proxies_[partition_id_];
 
     Log_debug("[%d] InitiateLeader locking mtx", loc_id_);
     mtx_.lock();
+    std::vector<janus::SiteProxyPair> proxies = commo()->rpc_par_proxies_[partition_id_];
     votedFor = -1;
     state = LEADER;
     nextIndex = std::vector<uint64_t>(proxies.size(), log.size() + 1);
@@ -144,7 +146,7 @@ namespace janus
     Log_info("[%d] InitiateLeader unlocked mtx", loc_id_);
 
     rrr::Coroutine::CreateRun(
-        [this, proxies]()
+        [this]()
         {
           while (state == LEADER && !serverShutdown)
           {
@@ -153,6 +155,8 @@ namespace janus
             matchIndex[loc_id_] = log.size();
             // we don't care about nextIndex because it is skipped (when sending entries, leader skips self)
 
+            std::lock_guard<std::recursive_mutex> lock(mtx_);
+            auto proxies = commo()->rpc_par_proxies_[partition_id_];
             for (auto &m : matchIndex)
             {
               if (m > commitIndex)
@@ -176,22 +180,23 @@ namespace janus
               {
                 continue; // skip sending to self
               }
+              // TODO: TEST STEP DOWN
               if (props.lastLogIndex >= nextIndex[p.first])
               {
-                Log_info("[%d] (LEADER) | will send appendEntries... %lu >= %lu", loc_id_, props.lastLogIndex, nextIndex[p.first]);
+                // Log_debug("[%d] (LEADER) | will send appendEntries... %lu >= %lu", loc_id_, props.lastLogIndex, nextIndex[p.first]);
                 auto logIndex = nextIndex[p.first];
                 auto entry = log.at(logIndex - 1);
                 auto logTerm = entry.first;
                 auto cmd = entry.second;
-                Log_debug("[%d] (LEADER) | Sent AppendEntries to server %d for logIndex %lu at time %lu", loc_id_, p.first, logIndex, GetTime());
-                commo()->SendAppendEntries(partition_id_, p.first, cmd, logIndex, logTerm, props, &mtx_, &nextIndex, &matchIndex);
+                // Log_debug("[%d] (LEADER) | Sent AppendEntries to server %d for logIndex %lu at time %lu", loc_id_, p.first, logIndex, GetTime());
+                commo()->SendAppendEntries(partition_id_, p.first, cmd, logIndex, logTerm, props, &mtx_, (int *)&state, &nextIndex, &matchIndex);
               }
               else
               {
                 commo()->SendEmptyAppendEntries(partition_id_, p.first, GetServerState());
               }
             }
-            Log_debug("[%d] (LEADER) | Sent heartbeats at time %lu", loc_id_, GetTime());
+            // Log_debug("[%d] (LEADER) | Sent heartbeats at time %lu", loc_id_, GetTime());
             timeout->Wait();
           }
         });
@@ -212,11 +217,13 @@ namespace janus
   /// Should return whether to continue serving the request or not
   bool RaftServer::Verify(ServerState *props)
   {
+    // Log_debug("[%d] Verify called", loc_id_);
     if (props->term > currentTerm)
     {
       // Higher term request received. Step down to follower if leader/candidate
       // Decide what to do in the respective handler functions
       // votedFor is reset when the new candidate's term is higher than the current term because it is guaranteed that we did not vote for a candidate in that term
+      std::lock_guard<std::recursive_mutex> lock(mtx_);
       currentTerm = props->term;
       votedFor = -1;
       state = FOLLOWER;
@@ -234,6 +241,7 @@ namespace janus
   // It is different from Verify only because it sets lastHeartbeatTime. We don't want to set lastHeartbeatTime in AskVote because the server initiating the request is not the leader
   void RaftServer::ReceiveHeartbeat(ServerState *props)
   {
+    // Log_debug("[%d] ReceiveHeartbeat called", loc_id_);
     if (!Verify(props))
     {
       return;
@@ -245,6 +253,7 @@ namespace janus
     // votedFor = -1;
     if (props->leaderCommit > commitIndex)
     {
+      // Log_debug("[%d] RE: Want to update commitIndex & lastApplied to %lu from %lu (lastLogIndex: %lu)", loc_id_, props->leaderCommit, commitIndex, log.size());
       commitIndex = std::min(props->leaderCommit, (uint64_t)log.size());
       // Apply all entries between lastApplied and commitIndex
       for (uint64_t i = lastApplied; i < commitIndex; i++)
@@ -254,12 +263,10 @@ namespace janus
         app_next_(*entry.second);
         lastApplied += 1;
       }
-      Log_info("[%d] RE: Updated commitIndex to %lu at time %lu", loc_id_, commitIndex, GetTime());
     }
-    Log_debug("[%d] Received heartbeat from server %d for term %lu at time %lu", loc_id_, props->serverId, props->term, lastHeartbeatTime);
+    // Log_debug("[%d] Received heartbeat from server %d for term %lu at time %lu", loc_id_, props->serverId, props->term, lastHeartbeatTime);
   }
 
-  // TODO (MAJOR BUG FIX): Step down to follower if entry is rejected by server with higher term
   // TODO (optimization): receive multiple entries at once
   /*
     term is the log entry's term
@@ -268,6 +275,7 @@ namespace janus
   */
   pair<uint64_t, bool> RaftServer::ReceiveEntry(shared_ptr<Marshallable> &cmd, uint64_t index, uint64_t term, ServerState *props)
   {
+    // Log_debug("[%d] ReceiveEntry called", loc_id_);
     if (!Verify(props))
     {
       Log_info("[%d] RE: Received entry from stale term (%lu < %lu)", loc_id_, props->term, currentTerm);
@@ -331,14 +339,14 @@ namespace janus
   void RaftServer::GetState(bool *is_leader, uint64_t *term)
   {
     /* Your code here. This function can be called from another OS thread. */
-    Log_info("[%d] (%s) GetState called at time %lu | state: %d, term: %lu", loc_id_, IsDisconnected() ? "disconnected" : "connected", GetTime(), state, currentTerm);
+    Log_debug("[%d] (%s) GetState called at time %lu | state: %d, term: %lu", loc_id_, IsDisconnected() ? "disconnected" : "connected", GetTime(), state, currentTerm);
     *is_leader = state == LEADER;
     *term = currentTerm;
   }
 
   std::pair<uint64_t, bool> RaftServer::AskVote(ServerState *props)
   {
-    Log_debug("[%d] Received RequestVote from server %d for term %lu at time %lu", loc_id_, props->serverId, props->term, GetTime());
+    // Log_debug("[%d] Received RequestVote from server %d for term %lu at time %lu", loc_id_, props->serverId, props->term, GetTime());
     if (!Verify(props))
     {
       return {currentTerm, false};
@@ -404,6 +412,7 @@ namespace janus
     if (disconnect)
     {
       verify(_proxies[partition_id_][loc_id_].size() == 0);
+      Log_debug("[%d] COMMO: %p", loc_id_, c);
       verify(c->rpc_par_proxies_.size() > 0);
       auto sz = c->rpc_par_proxies_.size();
       _proxies[partition_id_][loc_id_].insert(c->rpc_par_proxies_.begin(), c->rpc_par_proxies_.end());

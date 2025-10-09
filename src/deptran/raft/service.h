@@ -30,7 +30,7 @@ namespace janus
                uint64_t *, ret1,
                bool_t *, vote_granted)
     {
-      Log_info("RequestVote default value.");
+      // Log_info("RequestVote default value.");
       // Cannot use -1 because return type is uint64_t
       *ret1 = 0;
       *vote_granted = false;
@@ -48,7 +48,7 @@ namespace janus
                uint64_t *, followerTerm,
                bool_t *, followerAppendOK)
     {
-      Log_info("AppendEntries default value.");
+      // Log_info("AppendEntries default value.");
       // Cannot use -1 because return type is uint64_t
       *followerTerm = 0;
       *followerAppendOK = false;

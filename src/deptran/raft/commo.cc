@@ -38,7 +38,7 @@ namespace janus
       {
         continue; // skip self-vote
       }
-      Log_debug("[%d] Sending RequestVote to server %d for term %lu", props.serverId, p.first, props.term);
+      // Log_debug("[%d] Sending RequestVote to server %d for term %lu", props.serverId, p.first, props.term);
       RaftProxy *proxy = (RaftProxy *)p.second;
       FutureAttr fuattr;
       fuattr.callback = [quorumEvent](Future *fu)
@@ -61,8 +61,9 @@ namespace janus
   }
 
   void RaftCommo::SendAppendEntries(parid_t par_id, siteid_t site_id, shared_ptr<Marshallable> cmd, uint64_t index, uint64_t term, ServerState props,
-                                    std::recursive_mutex *mtx, std::vector<uint64_t> *nextIndex, std::vector<uint64_t> *matchIndex)
+                                    std::recursive_mutex *mtx, int *state, std::vector<uint64_t> *nextIndex, std::vector<uint64_t> *matchIndex)
   {
+    std::lock_guard<std::recursive_mutex> lock(*mtx);
     auto proxies = rpc_par_proxies_[par_id];
     for (auto &p : proxies)
     {
@@ -72,20 +73,21 @@ namespace janus
       }
       RaftProxy *proxy = (RaftProxy *)p.second;
       FutureAttr fuattr;
-      fuattr.callback = [site_id, index, props, nextIndex, matchIndex, mtx](Future *fu)
+      fuattr.callback = [site_id, index, props, state, nextIndex, matchIndex, mtx](Future *fu)
       {
         uint64_t followerTerm;
         bool_t followerAppendOK;
         fu->get_reply() >> followerTerm;
         fu->get_reply() >> followerAppendOK;
 
+        mtx->lock();
         if (followerTerm > props.term)
         {
-          // TODO (MAJOR BUG FIX): Step down as leader
           Log_info("[SAE] Discovered higher term from follower %d (%lu > %lu)", site_id, followerTerm, props.term);
+          // TODO (optimization): Find a better way to step down?
+          *state = 0; // TODO (TEST): STEP DOWN TO FOLLOWER
           return;
         }
-        mtx->lock();
         if (followerAppendOK)
         {
           Log_info("[SAE] Appended entry at index %lu for follower %d", index, site_id);
@@ -95,7 +97,9 @@ namespace janus
         else
         {
           Log_info("[SAE] Failed to append entry at index %lu for follower %d", index, site_id);
-          (*nextIndex)[site_id] = (*nextIndex)[site_id] - 1;
+          auto lastIndex = (*matchIndex)[site_id];
+          auto newIndex = (*nextIndex)[site_id] - 1;
+          (*nextIndex)[site_id] = newIndex <= lastIndex ? lastIndex + 1 : newIndex;
           (*matchIndex)[site_id] = index;
         }
         mtx->unlock();

@@ -19,7 +19,7 @@ namespace janus
     void SendRequestVote(parid_t par_id, ServerState props, shared_ptr<QuorumEvent> quorumEvent);
     void SendEmptyAppendEntries(parid_t par_id, siteid_t site_id, ServerState props);
     void SendAppendEntries(parid_t par_id, siteid_t site_id, shared_ptr<Marshallable> cmd, uint64_t index, uint64_t term, ServerState props,
-                           std::recursive_mutex *mtx, std::vector<uint64_t> *nextIndex, std::vector<uint64_t> *matchIndex);
+                           std::recursive_mutex *mtx, int *state, std::vector<uint64_t> *nextIndex, std::vector<uint64_t> *matchIndex);
 
     shared_ptr<IntEvent> SendString(parid_t par_id, siteid_t site_id, const string &msg, string *res);
 
