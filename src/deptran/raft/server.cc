@@ -67,8 +67,8 @@ namespace janus
     {
       return;
     }
+    Log_debug("[%d] (%s) starting election", loc_id_, IsDisconnected() ? "disconnected" : "connected");
     std::lock_guard<std::recursive_mutex> lock(mtx_);
-    Log_info("[%d] (%s) starting election", loc_id_, IsDisconnected() ? "disconnected" : "connected");
     // OR BETTER OPTION? When running for elections, dry run and see if server gets elected. Increase the currentTerm after election (but send currentTerm + 1 in RequestVote RPC)
     state = CANDIDATE;
     currentTerm += 1;
@@ -328,11 +328,8 @@ namespace janus
     Log_info("[%d] (LEADER_START) | Appending new log entry at index %lu for term %lu at time %lu", loc_id_, log.size(), currentTerm, GetTime());
     *index = log.size();
     *term = currentTerm;
-    while (lastApplied != *index)
-    {
-      // busy-wait
-      Reactor::CreateSpEvent<TimeoutEvent>(1e5)->Wait();
-    }
+    // wait for coroutine to send AppendEntries
+    Reactor::CreateSpEvent<TimeoutEvent>(HEARTBEAT_INTERVAL)->Wait();
     return true;
   }
 
