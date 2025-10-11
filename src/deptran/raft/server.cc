@@ -313,6 +313,8 @@ namespace janus
     }
     else if (currentProps.lastLogIndex >= prevLogIndex && prevLogIndex != 0 && log.at(prevLogIndex - 1).first != prevLogTerm)
     {
+      // TODO (optimization): Find last consistient index w/ server (serverLastLogIndex - entries.size() vs currentProps.lastLogIndex)
+
       // If conflicting entry (same index, different term), delete that entry and all that follow it, then append new entry
       log.resize(prevLogIndex - 1);
       currentProps = GetServerProps();
