@@ -51,6 +51,7 @@ namespace janus
             int randomDelay = GetRandomDelayMS(50); // up to 50ms
             auto timeout = Reactor::CreateSpEvent<TimeoutEvent>(ELECTION_TIMEOUT + randomDelay);
             timeout->Wait();
+            // Log_debug("[%d] Election timeout complete (will start election if server is follower)", loc_id_, currentTerm, GetTime());
             if (state != FOLLOWER)
             {
               continue;
@@ -68,23 +69,22 @@ namespace janus
     {
       return;
     }
-    Log_debug("[%d] (%s) starting election", loc_id_, IsDisconnected() ? "disconnected" : "connected");
+    // Log_debug("[%d] (%s) starting election", loc_id_, IsDisconnected() ? "disconnected" : "connected");
     std::lock_guard<std::recursive_mutex> lock(mtx_);
     // OR BETTER OPTION? When running for elections, dry run and see if server gets elected. Increase the currentTerm after election (but send currentTerm + 1 in RequestVote RPC)
     state = CANDIDATE;
     currentTerm += 1;
     votedFor = loc_id_;
-    // Effectively resetting the election timer
-    lastHeartbeatTime = GetTime();
     rrr::Coroutine::CreateRun(
         [this]()
         {
-          std::lock_guard<std::recursive_mutex> lock(mtx_);
           ServerProps props = GetServerProps();
           int totalServers = commo()->rpc_par_proxies_[partition_id_].size() - 1;
           if (totalServers <= 0)
           {
-            Log_info("[%d] Not enough servers (%d) to start election for term %lu at time %lu", loc_id_, totalServers + 1, currentTerm, GetTime());
+            // Log_info("[%d] Not enough servers (%d) to start election for term %lu at time %lu", loc_id_, totalServers + 1, currentTerm, GetTime());
+            Reactor::CreateSpEvent<TimeoutEvent>(ELECTION_TIMEOUT / 2)->Wait();
+            StartElection();
             return;
           }
           // quorum is totalServers/2 instead of totalServers/2 + 1 because we skip self-vote
@@ -93,6 +93,9 @@ namespace janus
           Log_debug("[%d] Props: term %lu, lastLogIndex %lu, lastLogTerm %lu", loc_id_, props.term, props.lastLogIndex, props.lastLogTerm);
           auto quorumTimeout = Reactor::CreateSpEvent<TimeoutEvent>(1e6); // 1s
           shared_ptr<QuorumEvent> quorumEvent = Reactor::CreateSpEvent<QuorumEvent>(totalServers, quorum);
+          std::lock_guard<std::recursive_mutex> lock(mtx_);
+          // Effectively reset the election timer
+          lastHeartbeatTime = GetTime();
           auto sendRequestVoteTime = GetTime();
           commo()->SendRequestVote(partition_id_, props, quorumEvent);
           while (!quorumEvent->IsReady() && !quorumTimeout->IsReady() && !serverShutdown)
@@ -128,8 +131,6 @@ namespace janus
             return;
           }
         });
-    // TODO: HANDLE
-    // If receive AppendEntries from new leader with term >= currentTerm, step down to follower
   }
 
   void RaftServer::InitiateLeader()
@@ -254,7 +255,7 @@ namespace janus
   // It is different from Verify only because it sets lastHeartbeatTime. We don't want to set lastHeartbeatTime in AskVote because the server initiating the request is not the leader
   void RaftServer::ReceiveHeartbeat(ServerProps *props)
   {
-    Log_debug("[%d] Received heartbeat from server %d for term %lu at time %lu", loc_id_, props->serverId, props->term, GetTime());
+    // Log_debug("[%d] Received heartbeat from server %d for term %lu at time %lu", loc_id_, props->serverId, props->term, GetTime());
     if (!Verify(props))
     {
       return;
@@ -264,10 +265,16 @@ namespace janus
     // currentTerm = props->term;
     // state = FOLLOWER;
     // votedFor = -1;
+
     if (props->commitIndex > commitIndex)
     {
       // Log_debug("[%d] RE: Want to update commitIndex & lastApplied to %lu from %lu (lastLogIndex: %lu)", loc_id_, props->leaderCommit, commitIndex, log.size());
       auto currentProps = GetServerProps();
+      if (currentProps.lastLogTerm != props->term)
+      {
+        // Cannot commit another leader's log
+        return;
+      }
       commitIndex = std::min(props->commitIndex, currentProps.lastLogIndex);
       // Apply all entries between lastApplied and commitIndex
       for (uint64_t i = lastApplied; i < commitIndex; i++)
@@ -311,8 +318,8 @@ namespace janus
       currentProps = GetServerProps();
       if (currentProps.lastLogTerm != prevLogTerm)
       {
-        currentProps.lastLogIndex -= 1; // So we can send the conflicting entry again (at index = prevLogIndex)
-        Log_debug("[%d] RE: Removed logs until index %lu (term mismatch %d != %d), retrying with index %lu for term %lu", loc_id_, prevLogIndex, currentProps.lastLogTerm, prevLogTerm, currentProps.lastLogIndex, props->term);
+        currentProps.lastLogIndex = std::max((uint64_t)1, currentProps.lastLogIndex) - 1; // So we can send the conflicting entry again (at index = prevLogIndex)
+        Log_debug("[%d] RE: Removed logs until index %lu (term mismatch %d != %d), retrying with index %lu for term %lu", loc_id_, prevLogIndex, currentProps.lastLogTerm, prevLogTerm, currentProps.lastLogIndex + 1, props->term);
         return {currentProps, false};
       }
       Log_debug("[%d] RE: Fixed log inconsistency for term %lu at time %lu", loc_id_, currentProps.lastLogIndex, props->term, GetTime());

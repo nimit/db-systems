@@ -88,8 +88,7 @@ namespace janus
       }
       RaftProxy *proxy = (RaftProxy *)p.second;
       FutureAttr fuattr;
-      uint64_t newIndexIfSuccess = prevLogIndex + entries.size();
-      fuattr.callback = [site_id, prevLogIndex, newIndexIfSuccess, props, mtx, state, leaderTerm, nextIndex, matchIndex](Future *fu)
+      fuattr.callback = [site_id, prevLogIndex, props, mtx, state, leaderTerm, nextIndex, matchIndex](Future *fu)
       {
         ServerProps followerProps;
         bool_t followerAppendOK;
@@ -108,13 +107,13 @@ namespace janus
         }
         if (followerAppendOK)
         {
-          Log_info("[SAE] Appended entries from index %lu to %lu for follower %d", prevLogIndex, newIndexIfSuccess, site_id);
-          (*nextIndex)[site_id] = newIndexIfSuccess + 1;
-          (*matchIndex)[site_id] = newIndexIfSuccess;
+          Log_info("[SAE] Appended entries from index %lu to %lu for follower %d", prevLogIndex, followerProps.lastLogIndex, site_id);
+          (*nextIndex)[site_id] = followerProps.lastLogIndex + 1;
+          (*matchIndex)[site_id] = followerProps.lastLogIndex;
         }
         else
         {
-          Log_info("[SAE] Failed to append entries from index %lu for follower %d. Will try from index %lu", prevLogIndex, site_id, followerProps.lastLogIndex + 1);
+          // Log_info("[SAE] Failed to append entries from index %lu for follower %d. Will try from index %lu", prevLogIndex, site_id, followerProps.lastLogIndex + 1);
           (*nextIndex)[site_id] = followerProps.lastLogIndex + 1;
           // Keep matchIndex as it is.... (can also be reset to 0, doesn't seem to matter)
           // (*matchIndex)[site_id] = 0;

@@ -10,8 +10,8 @@
 namespace janus
 {
 
-#define HEARTBEAT_INTERVAL 100000
-#define ELECTION_TIMEOUT 200000
+#define HEARTBEAT_INTERVAL 1e5 // 100K (100ms)
+#define ELECTION_TIMEOUT 3e5   // 300K (300ms)
 
   enum STATE
   {
