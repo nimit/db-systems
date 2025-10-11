@@ -20,12 +20,18 @@ namespace janus
     LEADER
   };
 
+  struct ReceivedEntry
+  {
+    shared_ptr<Marshallable> cmd;
+    uint64_t term;
+  };
+
   class RaftServer : public TxLogServer
   {
   public:
     std::pair<uint64_t, bool> AskVote(ServerProps *props);
     void ReceiveHeartbeat(ServerProps *props);
-    pair<uint64_t, bool> ReceiveEntry(shared_ptr<Marshallable> &cmd, uint64_t index, uint64_t term, ServerProps *props);
+    pair<ServerProps, bool> ReceiveEntry(vector<ReceivedEntry> entries, uint64_t prevLogIndex, uint64_t prevLogTerm, ServerProps *props);
 
   private:
     uint64_t lastHeartbeatTime = 0;

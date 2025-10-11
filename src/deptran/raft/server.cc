@@ -37,7 +37,7 @@ namespace janus
     Your code should be aware of that. This function is always called in the
     same OS thread as the RPC handlers. */
 
-    // Only coroutine that doesn't stop (no return/yield) until server is destroyed
+    // Only coroutine that doesn't stop (no return) until server is destroyed
     rrr::Coroutine::CreateRun(
         [this]()
         {
@@ -62,6 +62,7 @@ namespace janus
 
   void RaftServer::StartElection()
   {
+    // Log_debug("[%d] REMOVE: In StartElection", loc_id_);
     uint64_t total_us = GetTime();
     if (total_us - lastHeartbeatTime <= ELECTION_TIMEOUT)
     {
@@ -151,26 +152,32 @@ namespace janus
           while (state == LEADER && !serverShutdown)
           {
             auto props = GetServerProps();
-            int matchServers = 0;
-            matchIndex[loc_id_] = log.size();
-            // we don't care about nextIndex because it is skipped (when sending entries, leader skips self)
 
+            // we don't care about nextIndex[loc_id_] because it is skipped (when sending entries, leader skips self)
             std::lock_guard<std::recursive_mutex> lock(mtx_);
+            matchIndex[loc_id_] = props.lastLogIndex;
             auto proxies = commo()->rpc_par_proxies_[partition_id_];
-            for (auto &m : matchIndex)
+            auto matchCopy = matchIndex;
+            // majoorityIdx is n/2 (because vector idx will start from 0)
+            int majorityIdx = int(proxies.size() / 2);
+            std::nth_element(matchCopy.begin(), matchCopy.begin() + majorityIdx, matchCopy.end());
+            int highestReplicatedMajority = matchCopy[majorityIdx];
+            while (highestReplicatedMajority > commitIndex)
             {
-              if (m > commitIndex)
+              auto entry = log[highestReplicatedMajority - 1];
+              if (entry.first != currentTerm)
               {
-                matchServers += 1;
+                highestReplicatedMajority -= 1;
+                continue;
               }
-            }
-            if (matchServers > (proxies.size() / 2) && commitIndex < log.size())
-            {
-              commitIndex += 1;
-              auto entry = log[commitIndex - 1];
-              app_next_(*entry.second);
-              lastApplied += 1;
+              while (commitIndex < highestReplicatedMajority)
+              {
+                lastApplied += 1;
+                commitIndex += 1;
+                app_next_(*log[commitIndex - 1].second);
+              }
               Log_info("[%d] (LEADER) | Updated commitIndex to %lu at time %lu", loc_id_, commitIndex, GetTime());
+              break;
             }
 
             auto timeout = Reactor::CreateSpEvent<TimeoutEvent>(HEARTBEAT_INTERVAL);
@@ -184,12 +191,18 @@ namespace janus
               if (props.lastLogIndex >= nextIndex[p.first])
               {
                 // Log_debug("[%d] (LEADER) | will send appendEntries... %lu >= %lu", loc_id_, props.lastLogIndex, nextIndex[p.first]);
-                auto logIndex = nextIndex[p.first];
-                auto entry = log.at(logIndex - 1);
-                auto logTerm = entry.first;
-                auto cmd = entry.second;
+                auto prevLogIndex = nextIndex[p.first] - 1;
+                auto prevLogTerm = prevLogIndex == 0 ? 0 : log.at(prevLogIndex - 1).first;
+                vector<Entry> entries;
+                for (size_t i = prevLogIndex; i < log.size(); ++i)
+                {
+                  Entry e;
+                  e.term = log[i].first;
+                  e.cmd = MarshallDeputy(log[i].second);
+                  entries.push_back(std::move(e));
+                }
                 // Log_debug("[%d] (LEADER) | Sent AppendEntries to server %d for logIndex %lu at time %lu", loc_id_, p.first, logIndex, GetTime());
-                commo()->SendAppendEntries(partition_id_, p.first, cmd, logIndex, logTerm, props, &mtx_, (int *)&state, (int *)&currentTerm, &nextIndex, &matchIndex);
+                commo()->SendAppendEntries(partition_id_, p.first, entries, prevLogIndex, prevLogTerm, props, &mtx_, (int *)&state, (int *)&currentTerm, &nextIndex, &matchIndex);
               }
               else
               {
@@ -209,7 +222,7 @@ namespace janus
     props.serverId = loc_id_;
     props.lastLogIndex = log.size(); // index of last log entry (starts from 1 according to the raft paper)
     props.lastLogTerm = log.empty() ? 0 : log.back().first;
-    props.leaderCommit = commitIndex;
+    props.commitIndex = commitIndex;
     return props;
   }
 
@@ -241,7 +254,7 @@ namespace janus
   // It is different from Verify only because it sets lastHeartbeatTime. We don't want to set lastHeartbeatTime in AskVote because the server initiating the request is not the leader
   void RaftServer::ReceiveHeartbeat(ServerProps *props)
   {
-    // Log_debug("[%d] ReceiveHeartbeat called", loc_id_);
+    Log_debug("[%d] Received heartbeat from server %d for term %lu at time %lu", loc_id_, props->serverId, props->term, GetTime());
     if (!Verify(props))
     {
       return;
@@ -251,10 +264,11 @@ namespace janus
     // currentTerm = props->term;
     // state = FOLLOWER;
     // votedFor = -1;
-    if (props->leaderCommit > commitIndex)
+    if (props->commitIndex > commitIndex)
     {
       // Log_debug("[%d] RE: Want to update commitIndex & lastApplied to %lu from %lu (lastLogIndex: %lu)", loc_id_, props->leaderCommit, commitIndex, log.size());
-      commitIndex = std::min(props->leaderCommit, (uint64_t)log.size());
+      auto currentProps = GetServerProps();
+      commitIndex = std::min(props->commitIndex, currentProps.lastLogIndex);
       // Apply all entries between lastApplied and commitIndex
       for (uint64_t i = lastApplied; i < commitIndex; i++)
       {
@@ -273,43 +287,49 @@ namespace janus
     index is the log entry's index (starts from 1)
     Right now only sends a single entry (easier to implement and debug)
   */
-  pair<uint64_t, bool> RaftServer::ReceiveEntry(shared_ptr<Marshallable> &cmd, uint64_t index, uint64_t term, ServerProps *props)
+  pair<ServerProps, bool> RaftServer::ReceiveEntry(vector<ReceivedEntry> entries, uint64_t prevLogIndex, uint64_t prevLogTerm, ServerProps *props)
   {
     // Log_debug("[%d] ReceiveEntry called", loc_id_);
     if (!Verify(props))
     {
       Log_info("[%d] RE: Received entry from stale term (%lu < %lu)", loc_id_, props->term, currentTerm);
-      return {currentTerm, false};
+      return {GetServerProps(), false};
     }
     ReceiveHeartbeat(props);
 
     auto currentProps = GetServerProps();
-    if (currentProps.lastLogIndex == index && currentProps.lastLogTerm == term)
+    if (currentProps.lastLogIndex < prevLogIndex)
     {
-      // handle case where the term and log index match (already appended entry)
-      return {currentTerm, true};
+      // follower log not up to date, try sending entry that matches server's index + 1
+      Log_debug("[%d] RE: Follower log not up to date, trying to send entry that matches index %lu", loc_id_, currentProps.lastLogIndex);
+      return {currentProps, false};
     }
-    else if (currentProps.lastLogIndex >= index && currentProps.lastLogTerm != term)
+    else if (currentProps.lastLogIndex >= prevLogIndex && prevLogIndex != 0 && log.at(prevLogIndex - 1).first != prevLogTerm)
     {
       // If conflicting entry (same index, different term), delete that entry and all that follow it, then append new entry
-      log.resize(index - 1);
+      log.resize(prevLogIndex - 1);
       currentProps = GetServerProps();
-      if (currentProps.lastLogTerm != props->lastLogTerm)
+      if (currentProps.lastLogTerm != prevLogTerm)
       {
-        return {currentTerm, false};
+        currentProps.lastLogIndex -= 1; // So we can send the conflicting entry again (at index = prevLogIndex)
+        Log_debug("[%d] RE: Removed logs until index %lu (term mismatch %d != %d), retrying with index %lu for term %lu", loc_id_, prevLogIndex, currentProps.lastLogTerm, prevLogTerm, currentProps.lastLogIndex, props->term);
+        return {currentProps, false};
       }
-      log.push_back({term, cmd});
-      Log_info("[%d] RE: Fixed log inconsistency and appended new log entry at index %lu for term %lu at time %lu", loc_id_, log.size(), props->term, GetTime());
-      return {currentTerm, true};
+      Log_debug("[%d] RE: Fixed log inconsistency for term %lu at time %lu", loc_id_, currentProps.lastLogIndex, props->term, GetTime());
     }
-    else if (currentProps.lastLogIndex == index - 1)
+
+    if (currentProps.lastLogIndex == prevLogIndex)
     {
-      log.push_back({term, cmd});
-      Log_info("[%d] RE: Appended new log entry at index %lu for term %lu at time %lu", loc_id_, currentProps.lastLogIndex + 1, props->term, GetTime());
-      return {currentTerm, true};
+      for (const auto &e : entries)
+      {
+        log.push_back({std::move(e.term), std::move(e.cmd)});
+      }
+      Log_info("[%d] RE: Appended %d new log entries from index %lu for term %lu at time %lu", loc_id_, entries.size(), prevLogIndex, props->term, GetTime());
     }
-    // Reject entry if log isn't up to date with leader
-    return {currentTerm, false};
+
+    // Logs up to date
+    // TODO(optimization): Add ReceiveHeartbeat content here
+    return {currentProps, true};
   }
 
   bool RaftServer::Start(shared_ptr<Marshallable> &cmd, uint64_t *index, uint64_t *term)
@@ -328,8 +348,9 @@ namespace janus
     Log_info("[%d] (LEADER_START) | Appending new log entry at index %lu for term %lu at time %lu", loc_id_, log.size(), currentTerm, GetTime());
     *index = log.size();
     *term = currentTerm;
-    // wait for coroutine to send AppendEntries
-    Reactor::CreateSpEvent<TimeoutEvent>(HEARTBEAT_INTERVAL)->Wait();
+    // wait for leader coroutine to send AppendEntries
+    // auto timeout = Reactor::CreateSpEvent<TimeoutEvent>(HEARTBEAT_INTERVAL);
+    // timeout->Wait();
     return true;
   }
 

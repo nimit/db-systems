@@ -6,13 +6,18 @@ struct ServerProps
   uint64_t term;
   uint64_t lastLogIndex;
   uint64_t lastLogTerm;
-  uint64_t leaderCommit;
+  uint64_t commitIndex;
 };
+
+struct Entry {
+  MarshallDeputy cmd;
+  uint64_t term;
+}
 
 abstract service Raft
 {
-  defer RequestVote(ServerProps props | uint64_t ret1, bool_t vote_granted);
-  defer AppendEntries(MarshallDeputy cmd, uint64_t index, uint64_t term, ServerProps props | uint64_t followerTerm, bool_t followerAppendOK);
+  defer RequestVote(ServerProps props | uint64_t voterTerm, bool_t vote_granted);
+  defer AppendEntries(std::vector<Entry> entries, uint64_t prevLogIndex, uint64_t prevLogTerm,  ServerProps props | ServerProps followerProps, bool_t followerAppendOK);
   defer EmptyAppendEntries(ServerProps props);
   defer HelloRpc(string req | string res);
 }

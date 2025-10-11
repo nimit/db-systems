@@ -75,7 +75,7 @@ namespace janus
     }
   }
 
-  void RaftCommo::SendAppendEntries(parid_t par_id, siteid_t site_id, shared_ptr<Marshallable> cmd, uint64_t index, uint64_t term, ServerProps props,
+  void RaftCommo::SendAppendEntries(parid_t par_id, siteid_t site_id, vector<Entry> entries, uint64_t prevLogIndex, uint64_t prevLogTerm, ServerProps props,
                                     std::recursive_mutex *mtx, int *state, int *leaderTerm, std::vector<uint64_t> *nextIndex, std::vector<uint64_t> *matchIndex)
   {
     std::lock_guard<std::recursive_mutex> lock(*mtx);
@@ -88,43 +88,40 @@ namespace janus
       }
       RaftProxy *proxy = (RaftProxy *)p.second;
       FutureAttr fuattr;
-      fuattr.callback = [site_id, index, props, nextIndex, matchIndex, mtx, state, leaderTerm](Future *fu)
+      uint64_t newIndexIfSuccess = prevLogIndex + entries.size();
+      fuattr.callback = [site_id, prevLogIndex, newIndexIfSuccess, props, mtx, state, leaderTerm, nextIndex, matchIndex](Future *fu)
       {
-        uint64_t followerTerm;
+        ServerProps followerProps;
         bool_t followerAppendOK;
-        fu->get_reply() >> followerTerm;
+        fu->get_reply() >> followerProps;
         fu->get_reply() >> followerAppendOK;
 
-        mtx->lock();
-        if (followerTerm > props.term)
+        std::lock_guard<std::recursive_mutex> lock(*mtx);
+        if (followerProps.term > props.term)
         {
-          Log_info("[SAE] Discovered higher term from follower %d (%lu > %lu)", site_id, followerTerm, props.term);
+          Log_info("[SAE] LEADER %d discovered higher term from follower %d (%lu > %lu)", props.serverId, site_id, followerProps.term, props.term);
           // TODO (optimization): Find a better way to step down?
           // TODO (TEST): STEP DOWN TO FOLLOWER
           *state = 0;
-          *leaderTerm = followerTerm;
+          *leaderTerm = followerProps.term;
           return;
         }
         if (followerAppendOK)
         {
-          Log_info("[SAE] Appended entry at index %lu for follower %d", index, site_id);
-          (*nextIndex)[site_id] = (*nextIndex)[site_id] + 1;
-          (*matchIndex)[site_id] = index;
+          Log_info("[SAE] Appended entries from index %lu to %lu for follower %d", prevLogIndex, newIndexIfSuccess, site_id);
+          (*nextIndex)[site_id] = newIndexIfSuccess + 1;
+          (*matchIndex)[site_id] = newIndexIfSuccess;
         }
         else
         {
-          Log_info("[SAE] Failed to append entry at index %lu for follower %d", index, site_id);
-          auto lastIndex = (*matchIndex)[site_id];
-          auto newIndex = (*nextIndex)[site_id] - 1;
-          (*nextIndex)[site_id] = newIndex <= 0 ? 1 : newIndex;
-          (*matchIndex)[site_id] = 0;
+          Log_info("[SAE] Failed to append entries from index %lu for follower %d. Will try from index %lu", prevLogIndex, site_id, followerProps.lastLogIndex + 1);
+          (*nextIndex)[site_id] = followerProps.lastLogIndex + 1;
+          // Keep matchIndex as it is.... (can also be reset to 0, doesn't seem to matter)
+          // (*matchIndex)[site_id] = 0;
         }
-        mtx->unlock();
       };
-      /* wrap Marshallable in a MarshallDeputy to send over RPC */
-      MarshallDeputy md(cmd);
-      Call_Async(proxy, AppendEntries, md, index, term, props, fuattr);
-      break;
+      Call_Async(proxy, AppendEntries, entries, prevLogIndex, prevLogTerm, props, fuattr);
+      return;
     }
   }
 

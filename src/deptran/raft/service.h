@@ -27,12 +27,12 @@ namespace janus
 
     RpcHandler(RequestVote, 3,
                const ServerProps &, props,
-               uint64_t *, ret1,
+               uint64_t *, voterTerm,
                bool_t *, vote_granted)
     {
       // Log_info("RequestVote default value.");
       // Cannot use -1 because return type is uint64_t
-      *ret1 = 0;
+      *voterTerm = 0;
       *vote_granted = false;
     }
 
@@ -41,16 +41,22 @@ namespace janus
     }
 
     RpcHandler(AppendEntries, 6,
-               const MarshallDeputy &, cmd,
-               const uint64_t &, index,
-               const uint64_t &, term,
+               const std::vector<Entry> &, entries,
+               const uint64_t &, prevLogIndex,
+               const uint64_t &, prevLogTerm,
                const ServerProps &, props,
-               uint64_t *, followerTerm,
+               ServerProps *, followerProps,
                bool_t *, followerAppendOK)
     {
       // Log_info("AppendEntries default value.");
       // Cannot use -1 because return type is uint64_t
-      *followerTerm = 0;
+      ServerProps dummyProps;
+      dummyProps.term = 0;
+      dummyProps.serverId = 0;
+      dummyProps.lastLogIndex = 0;
+      dummyProps.lastLogTerm = 0;
+      dummyProps.commitIndex = 0;
+      *followerProps = dummyProps;
       *followerAppendOK = false;
     }
 
