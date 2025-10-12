@@ -96,6 +96,10 @@ namespace janus
         fu->get_reply() >> followerAppendOK;
 
         std::lock_guard<std::recursive_mutex> lock(*mtx);
+        if (*state != 2)
+        {
+          return;
+        }
         if (followerProps.term > props.term)
         {
           Log_info("[SAE] LEADER %d discovered higher term from follower %d (%lu > %lu)", props.serverId, site_id, followerProps.term, props.term);
@@ -107,16 +111,16 @@ namespace janus
         }
         if (followerAppendOK)
         {
-          Log_info("[SAE] Appended entries from index %lu to %lu for follower %d", prevLogIndex, followerProps.lastLogIndex, site_id);
-          (*nextIndex)[site_id] = followerProps.lastLogIndex + 1;
-          (*matchIndex)[site_id] = followerProps.lastLogIndex;
+          (*nextIndex)[site_id] = std::min(followerProps.lastLogIndex, props.lastLogIndex) + 1;
+          (*matchIndex)[site_id] = std::min(followerProps.lastLogIndex, props.lastLogIndex);
+          Log_info("[SAE] Appended entries from index %lu to %lu for follower %d | ldr: %d, term: %lu", prevLogIndex, followerProps.lastLogIndex, site_id, props.serverId, props.term);
         }
         else
         {
-          // Log_info("[SAE] Failed to append entries from index %lu for follower %d. Will try from index %lu", prevLogIndex, site_id, followerProps.lastLogIndex + 1);
           (*nextIndex)[site_id] = followerProps.lastLogIndex + 1;
           // Keep matchIndex as it is.... (can also be reset to 0, doesn't seem to matter)
           // (*matchIndex)[site_id] = 0;
+          Log_info("[SAE] Failed to append entries from index %lu for follower %d. Will try from index %lu", prevLogIndex, site_id, followerProps.lastLogIndex + 1);
         }
       };
       Call_Async(proxy, AppendEntries, entries, prevLogIndex, prevLogTerm, props, fuattr);

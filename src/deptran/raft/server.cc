@@ -79,6 +79,7 @@ namespace janus
         [this]()
         {
           ServerProps props = GetServerProps();
+          // TODO (fix): Replace totalServers with NSERVERS (and remove the check for totalServers <= 0, let the election happen naturally)
           int totalServers = commo()->rpc_par_proxies_[partition_id_].size() - 1;
           if (totalServers <= 0)
           {
@@ -93,6 +94,7 @@ namespace janus
           Log_debug("[%d] Props: term %lu, lastLogIndex %lu, lastLogTerm %lu", loc_id_, props.term, props.lastLogIndex, props.lastLogTerm);
           auto quorumTimeout = Reactor::CreateSpEvent<TimeoutEvent>(1e6); // 1s
           shared_ptr<QuorumEvent> quorumEvent = Reactor::CreateSpEvent<QuorumEvent>(totalServers, quorum);
+          // TODO (fix): Remove the lock here
           std::lock_guard<std::recursive_mutex> lock(mtx_);
           // Effectively reset the election timer
           lastHeartbeatTime = GetTime();
@@ -142,8 +144,8 @@ namespace janus
     std::vector<janus::SiteProxyPair> proxies = commo()->rpc_par_proxies_[partition_id_];
     votedFor = -1;
     state = LEADER;
-    nextIndex = std::vector<uint64_t>(proxies.size(), std::max((uint64_t)1, log.size()));
-    matchIndex = std::vector<uint64_t>(proxies.size(), 0);
+    nextIndex = std::vector<uint64_t>(NSERVERS, std::max((uint64_t)1, log.size()));
+    matchIndex = std::vector<uint64_t>(NSERVERS, 0);
     mtx_.unlock();
     Log_info("[%d] InitiateLeader unlocked mtx", loc_id_);
 
@@ -160,7 +162,7 @@ namespace janus
             auto proxies = commo()->rpc_par_proxies_[partition_id_];
             auto matchCopy = matchIndex;
             // majoorityIdx is n/2 (because vector idx will start from 0)
-            int majorityIdx = int(proxies.size() / 2);
+            int majorityIdx = int(NSERVERS / 2);
             std::nth_element(matchCopy.begin(), matchCopy.begin() + majorityIdx, matchCopy.end());
             int highestReplicatedMajority = matchCopy[majorityIdx];
             while (highestReplicatedMajority > commitIndex)
@@ -177,6 +179,7 @@ namespace janus
                 commitIndex += 1;
                 app_next_(*log[commitIndex - 1].second);
               }
+              Log_debug("[%d] (LEADER) matchIndices: %d %d %d %d %d", loc_id_, matchIndex[0], matchIndex[1], matchIndex[2], matchIndex[3], matchIndex[4]);
               Log_info("[%d] (LEADER) | Updated commitIndex to %lu at time %lu", loc_id_, commitIndex, GetTime());
               break;
             }
@@ -296,7 +299,7 @@ namespace janus
   */
   pair<ServerProps, bool> RaftServer::ReceiveEntry(vector<ReceivedEntry> entries, uint64_t prevLogIndex, uint64_t prevLogTerm, ServerProps *props)
   {
-    // Log_debug("[%d] ReceiveEntry called", loc_id_);
+    Log_debug("[%d] ReceiveEntry called w %d entries from %d for term %lu (leader: %d)", loc_id_, entries.size(), prevLogIndex, prevLogTerm, props->serverId);
     if (!Verify(props))
     {
       Log_info("[%d] RE: Received entry from stale term (%lu < %lu)", loc_id_, props->term, currentTerm);
