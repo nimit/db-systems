@@ -178,26 +178,18 @@ namespace janus
               {
                 continue; // skip sending to self
               }
-              if (props.lastLogIndex >= nextIndex[p.first])
+              auto prevLogIndex = nextIndex[p.first] - 1;
+              auto prevLogTerm = prevLogIndex == 0 ? 0 : log.at(prevLogIndex - 1).first;
+              vector<Entry> entries;
+              for (size_t i = prevLogIndex; i < log.size(); ++i)
               {
-                // Log_debug("[%d] (LEADER) | will send appendEntries... %lu >= %lu", loc_id_, props.lastLogIndex, nextIndex[p.first]);
-                auto prevLogIndex = nextIndex[p.first] - 1;
-                auto prevLogTerm = prevLogIndex == 0 ? 0 : log.at(prevLogIndex - 1).first;
-                vector<Entry> entries;
-                for (size_t i = prevLogIndex; i < log.size(); ++i)
-                {
-                  Entry e;
-                  e.term = log[i].first;
-                  e.cmd = MarshallDeputy(log[i].second);
-                  entries.push_back(std::move(e));
-                }
-                // Log_debug("[%d] (LEADER) | Sent AppendEntries to server %d for logIndex %lu at time %lu", loc_id_, p.first, logIndex, GetTime());
-                commo()->SendAppendEntries(partition_id_, p.first, entries, prevLogIndex, prevLogTerm, props, &mtx_, (int *)&state, (int *)&currentTerm, &nextIndex, &matchIndex);
+                Entry e;
+                e.term = log[i].first;
+                e.cmd = MarshallDeputy(log[i].second);
+                entries.push_back(std::move(e));
               }
-              else
-              {
-                commo()->SendEmptyAppendEntries(partition_id_, p.first, GetServerProps(), &mtx_, (int *)&state, (int *)&currentTerm);
-              }
+              // Log_debug("[%d] (LEADER) | Sent AppendEntries to server %d for logIndex %lu at time %lu", loc_id_, p.first, logIndex, GetTime());
+              commo()->SendAppendEntries(partition_id_, p.first, entries, prevLogIndex, prevLogTerm, props, &mtx_, (int *)&state, (int *)&currentTerm, &nextIndex, &matchIndex);
             }
             mtx_.unlock();
             // Log_debug("[%d] (LEADER) | Sent heartbeats at time %lu", loc_id_, GetTime());
@@ -242,43 +234,6 @@ namespace janus
     return false;
   }
 
-  // ReceviveHeartbeat is called when a server receives a heartbeat from another server
-  // It is different from Verify only because it sets lastHeartbeatTime. We don't want to set lastHeartbeatTime in AskVote because the server initiating the request is not the leader
-  void RaftServer::ReceiveHeartbeat(ServerProps *props)
-  {
-    // Log_debug("[%d] Received heartbeat from server %d for term %lu at time %lu", loc_id_, props->serverId, props->term, GetTime());
-    if (!Verify(props))
-    {
-      return;
-    }
-    lastHeartbeatTime = GetTime();
-    //* Already happened in Verify
-    // currentTerm = props->term;
-    // state = FOLLOWER;
-    // votedFor = -1;
-
-    if (props->commitIndex > commitIndex)
-    {
-      // Log_debug("[%d] RE: Want to update commitIndex & lastApplied to %lu from %lu (lastLogIndex: %lu)", loc_id_, props->leaderCommit, commitIndex, log.size());
-      auto currentProps = GetServerProps();
-      if (currentProps.lastLogTerm != props->term)
-      {
-        // Cannot commit another leader's log
-        return;
-      }
-      commitIndex = std::min(props->commitIndex, currentProps.lastLogIndex);
-      // Apply all entries between lastApplied and commitIndex
-      for (uint64_t i = lastApplied; i < commitIndex; i++)
-      {
-        auto entry = log[i];
-        // Log_info("[%d] RE: Applying log entry at index %lu for term %lu at time %lu", loc_id_, i + 1, entry.first, GetTime());
-        app_next_(*entry.second);
-        lastApplied += 1;
-      }
-    }
-    // Log_debug("[%d] Received heartbeat from server %d for term %lu at time %lu", loc_id_, props->serverId, props->term, lastHeartbeatTime);
-  }
-
   /*
     term is the log entry's term
     index is the log entry's index (starts from 1)
@@ -292,7 +247,7 @@ namespace janus
       Log_info("[%d] RE: Received entry from stale term (%lu < %lu)", loc_id_, props->term, currentTerm);
       return {GetServerProps(), false};
     }
-    ReceiveHeartbeat(props);
+    lastHeartbeatTime = GetTime();
 
     auto currentProps = GetServerProps();
     if (currentProps.lastLogIndex < prevLogIndex)
@@ -303,8 +258,6 @@ namespace janus
     }
     else if (currentProps.lastLogIndex >= prevLogIndex && prevLogIndex != 0 && log.at(prevLogIndex - 1).first != prevLogTerm)
     {
-      // TODO (optimization): Find last consistient index w/ server (serverLastLogIndex - entries.size() vs currentProps.lastLogIndex)
-
       // If conflicting entry (same index, different term), delete that entry and all that follow it, then append new entry
       log.resize(prevLogIndex - 1);
       currentProps = GetServerProps();
@@ -326,8 +279,22 @@ namespace janus
       Log_info("[%d] RE: Appended %d new log entries from index %lu for term %lu at time %lu", loc_id_, entries.size(), prevLogIndex, props->term, GetTime());
     }
 
-    // Logs up to date
-    // TODO(optimization): Add ReceiveHeartbeat content here (and remove SendEmptyAppendEntries RPC)
+    // At this point, logs are up to date
+    currentProps = GetServerProps();
+    // (term equivalency because cannot commit another leader's log)
+    if (props->commitIndex > commitIndex && currentProps.lastLogTerm == props->term)
+    {
+      // Log_debug("[%d] RE: Want to update commitIndex & lastApplied to %lu from %lu (lastLogIndex: %lu)", loc_id_, props->leaderCommit, commitIndex, log.size());
+      commitIndex = std::min(props->commitIndex, currentProps.lastLogIndex);
+      // Apply all entries between lastApplied and commitIndex
+      for (uint64_t i = lastApplied; i < commitIndex; i++)
+      {
+        auto entry = log[i];
+        // Log_info("[%d] RE: Applying log entry at index %lu for term %lu at time %lu", loc_id_, i + 1, entry.first, GetTime());
+        app_next_(*entry.second);
+        lastApplied += 1;
+      }
+    }
     return {currentProps, true};
   }
 

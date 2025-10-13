@@ -33,7 +33,6 @@ namespace janus
   {
   public:
     std::pair<uint64_t, bool> AskVote(ServerProps *props);
-    void ReceiveHeartbeat(ServerProps *props);
     pair<ServerProps, bool> ReceiveEntry(vector<ReceivedEntry> entries, uint64_t prevLogIndex, uint64_t prevLogTerm, ServerProps *props);
 
   private:

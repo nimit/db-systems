@@ -14,34 +14,6 @@ namespace janus
   RaftCommo::RaftCommo(PollMgr *poll) : Communicator(poll)
   {
   }
-  void RaftCommo::SendEmptyAppendEntries(parid_t par_id, siteid_t site_id, ServerProps props, std::recursive_mutex *mtx, int *state, int *term)
-  {
-    auto proxies = rpc_par_proxies_[par_id];
-    for (auto &p : proxies)
-    {
-      if (p.first != site_id)
-      {
-        continue;
-      }
-      RaftProxy *proxy = (RaftProxy *)p.second;
-      FutureAttr fuattr;
-      fuattr.callback = [site_id, props, mtx, state, term](Future *fu)
-      {
-        uint64_t followerTerm;
-        bool_t followerReceivedHeartbeat;
-        fu->get_reply() >> followerTerm;
-        fu->get_reply() >> followerReceivedHeartbeat;
-        if (followerTerm > props.term)
-        {
-          Log_info("[SEAE] Discovered higher term from follower %d (%lu > %lu)", site_id, followerTerm, props.term);
-          std::lock_guard<std::recursive_mutex> lock(*mtx);
-          *state = 0;
-          *term = followerTerm;
-        }
-      };
-      Call_Async(proxy, EmptyAppendEntries, props);
-    }
-  }
 
   void RaftCommo::SendRequestVote(parid_t par_id, ServerProps props, shared_ptr<QuorumEvent> quorumEvent)
   {

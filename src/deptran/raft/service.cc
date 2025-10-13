@@ -23,12 +23,6 @@ namespace janus
     defer->reply();
   }
 
-  void RaftServiceImpl::HandleEmptyAppendEntries(const ServerProps &props, rrr::DeferredReply *defer)
-  {
-    svr_->ReceiveHeartbeat((ServerProps *)&props);
-    defer->reply();
-  }
-
   void RaftServiceImpl::HandleAppendEntries(const std::vector<Entry> &entries, const uint64_t &prevLogIndex, const uint64_t &prevLogTerm, const ServerProps &props, ServerProps *followerProps, bool_t *followerAppendOK, rrr::DeferredReply *defer)
   {
     std::vector<ReceivedEntry> receivedEntries;

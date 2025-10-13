@@ -34,10 +34,6 @@ namespace janus
       *vote_granted = false;
     }
 
-    RpcHandler(EmptyAppendEntries, 1, const ServerProps &, props)
-    {
-    }
-
     RpcHandler(AppendEntries, 6,
                const std::vector<Entry> &, entries,
                const uint64_t &, prevLogIndex,
