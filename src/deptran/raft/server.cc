@@ -79,23 +79,12 @@ namespace janus
         [this]()
         {
           ServerProps props = GetServerProps();
-          // TODO (fix): Replace totalServers with NSERVERS (and remove the check for totalServers <= 0, let the election happen naturally)
-          int totalServers = commo()->rpc_par_proxies_[partition_id_].size() - 1;
-          if (totalServers <= 0)
-          {
-            // Log_info("[%d] Not enough servers (%d) to start election for term %lu at time %lu", loc_id_, totalServers + 1, currentTerm, GetTime());
-            Reactor::CreateSpEvent<TimeoutEvent>(ELECTION_TIMEOUT / 2)->Wait();
-            StartElection();
-            return;
-          }
-          // quorum is totalServers/2 instead of totalServers/2 + 1 because we skip self-vote
-          int quorum = totalServers / 2;
-          Log_info("[%d] Starting election for term %lu at time %lu (total: %d, quorum: %d)", loc_id_, currentTerm, GetTime(), totalServers, quorum);
+          // quorum is NSERVERS/2 instead of NSERVERS/2 + 1 because we skip self-vote
+          int quorum = int(NSERVERS / 2);
+          Log_info("[%d] Starting election for term %lu at time %lu (total: %d, quorum: %d)", loc_id_, currentTerm, GetTime(), NSERVERS, quorum);
           Log_debug("[%d] Props: term %lu, lastLogIndex %lu, lastLogTerm %lu", loc_id_, props.term, props.lastLogIndex, props.lastLogTerm);
-          auto quorumTimeout = Reactor::CreateSpEvent<TimeoutEvent>(1e6); // 1s
-          shared_ptr<QuorumEvent> quorumEvent = Reactor::CreateSpEvent<QuorumEvent>(totalServers, quorum);
-          // TODO (fix): Remove the lock here
-          std::lock_guard<std::recursive_mutex> lock(mtx_);
+          auto quorumTimeout = Reactor::CreateSpEvent<TimeoutEvent>(ELECTION_TIMEOUT); // 1s
+          shared_ptr<QuorumEvent> quorumEvent = Reactor::CreateSpEvent<QuorumEvent>(NSERVERS, quorum);
           // Effectively reset the election timer
           lastHeartbeatTime = GetTime();
           auto sendRequestVoteTime = GetTime();
@@ -109,11 +98,13 @@ namespace janus
             {
               break;
             }
-            Log_info("[%d] Waiting for votes... (have %d yes, %d no)", loc_id_, quorumEvent->n_voted_yes_, quorumEvent->n_voted_no_);
+            // Log_debug("[%d] Waiting for votes... (have %d yes, %d no)", loc_id_, quorumEvent->n_voted_yes_, quorumEvent->n_voted_no_);
           }
           if (quorumTimeout->IsReady() || serverShutdown)
           {
             Log_info("[%d] Election coroutine timeout/shutdown for term %lu at time %lu", loc_id_, currentTerm, GetTime());
+            Reactor::CreateSpEvent<TimeoutEvent>(GetRandomDelayMS(500))->Wait();
+            StartElection();
             return;
           }
           else if (lastHeartbeatTime > sendRequestVoteTime)
@@ -128,7 +119,7 @@ namespace janus
           }
           else
           {
-            Reactor::CreateSpEvent<TimeoutEvent>(GetRandomDelayMS(100))->Wait();
+            Reactor::CreateSpEvent<TimeoutEvent>(GetRandomDelayMS(500))->Wait();
             StartElection();
             return;
           }
@@ -138,8 +129,6 @@ namespace janus
   void RaftServer::InitiateLeader()
   {
     Log_info("[%d] Becoming leader for term %lu at time %lu", loc_id_, currentTerm, GetTime());
-
-    Log_debug("[%d] InitiateLeader locking mtx", loc_id_);
     mtx_.lock();
     std::vector<janus::SiteProxyPair> proxies = commo()->rpc_par_proxies_[partition_id_];
     votedFor = -1;
@@ -147,19 +136,17 @@ namespace janus
     nextIndex = std::vector<uint64_t>(NSERVERS, std::max((uint64_t)1, log.size()));
     matchIndex = std::vector<uint64_t>(NSERVERS, 0);
     mtx_.unlock();
-    Log_info("[%d] InitiateLeader unlocked mtx", loc_id_);
+    Log_debug("[%d] InitiateLeader unlocked mtx", loc_id_);
 
     rrr::Coroutine::CreateRun(
         [this]()
         {
           while (state == LEADER && !serverShutdown)
           {
+            mtx_.lock();
             auto props = GetServerProps();
-
-            // we don't care about nextIndex[loc_id_] because it is skipped (when sending entries, leader skips self)
-            std::lock_guard<std::recursive_mutex> lock(mtx_);
             matchIndex[loc_id_] = props.lastLogIndex;
-            auto proxies = commo()->rpc_par_proxies_[partition_id_];
+            // we don't care about nextIndex[loc_id_] because it is skipped (when sending entries, leader skips self)
             auto matchCopy = matchIndex;
             // majoorityIdx is n/2 (because vector idx will start from 0)
             int majorityIdx = int(NSERVERS / 2);
@@ -179,19 +166,18 @@ namespace janus
                 commitIndex += 1;
                 app_next_(*log[commitIndex - 1].second);
               }
-              Log_debug("[%d] (LEADER) matchIndices: %d %d %d %d %d", loc_id_, matchIndex[0], matchIndex[1], matchIndex[2], matchIndex[3], matchIndex[4]);
               Log_info("[%d] (LEADER) | Updated commitIndex to %lu at time %lu", loc_id_, commitIndex, GetTime());
               break;
             }
 
             auto timeout = Reactor::CreateSpEvent<TimeoutEvent>(HEARTBEAT_INTERVAL);
+            auto proxies = commo()->rpc_par_proxies_[partition_id_];
             for (auto &p : proxies)
             {
               if (p.first == loc_id_)
               {
                 continue; // skip sending to self
               }
-              // TODO: TEST STEP DOWN
               if (props.lastLogIndex >= nextIndex[p.first])
               {
                 // Log_debug("[%d] (LEADER) | will send appendEntries... %lu >= %lu", loc_id_, props.lastLogIndex, nextIndex[p.first]);
@@ -213,6 +199,7 @@ namespace janus
                 commo()->SendEmptyAppendEntries(partition_id_, p.first, GetServerProps(), &mtx_, (int *)&state, (int *)&currentTerm);
               }
             }
+            mtx_.unlock();
             // Log_debug("[%d] (LEADER) | Sent heartbeats at time %lu", loc_id_, GetTime());
             timeout->Wait();
           }
@@ -222,6 +209,7 @@ namespace janus
   ServerProps RaftServer::GetServerProps()
   {
     ServerProps props;
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
     props.term = currentTerm;
     props.serverId = loc_id_;
     props.lastLogIndex = log.size(); // index of last log entry (starts from 1 according to the raft paper)
@@ -291,7 +279,6 @@ namespace janus
     // Log_debug("[%d] Received heartbeat from server %d for term %lu at time %lu", loc_id_, props->serverId, props->term, lastHeartbeatTime);
   }
 
-  // TODO (optimization): receive multiple entries at once
   /*
     term is the log entry's term
     index is the log entry's index (starts from 1)
@@ -340,7 +327,7 @@ namespace janus
     }
 
     // Logs up to date
-    // TODO(optimization): Add ReceiveHeartbeat content here
+    // TODO(optimization): Add ReceiveHeartbeat content here (and remove SendEmptyAppendEntries RPC)
     return {currentProps, true};
   }
 
@@ -352,6 +339,7 @@ namespace janus
 
     // Return false if this server is not the leader
     // If server is the leader, append to new log entry
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
     if (state != LEADER)
     {
       return false;

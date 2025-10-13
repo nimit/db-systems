@@ -19,7 +19,6 @@ namespace janus
   class RaftServer;
   class RaftServiceImpl : public RaftService
   // usage: RpcHandler(RPC_NAME, N_PARAMS, PARAMS...) { DEFAULTLOGIC }
-  // TODO: These defaults are sensible but the default logic should be handled in receiver functions.
   {
   public:
     RaftServer *svr_;
@@ -30,7 +29,6 @@ namespace janus
                uint64_t *, voterTerm,
                bool_t *, vote_granted)
     {
-      // Log_info("RequestVote default value.");
       // Cannot use -1 because return type is uint64_t
       *voterTerm = 0;
       *vote_granted = false;
@@ -48,7 +46,6 @@ namespace janus
                ServerProps *, followerProps,
                bool_t *, followerAppendOK)
     {
-      // Log_info("AppendEntries default value.");
       // Cannot use -1 because return type is uint64_t
       ServerProps dummyProps;
       dummyProps.term = 0;

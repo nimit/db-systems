@@ -34,7 +34,6 @@ namespace janus
         if (followerTerm > props.term)
         {
           Log_info("[SEAE] Discovered higher term from follower %d (%lu > %lu)", site_id, followerTerm, props.term);
-          // TODO: STEP DOWN & UPDATE TERM
           std::lock_guard<std::recursive_mutex> lock(*mtx);
           *state = 0;
           *term = followerTerm;
@@ -103,10 +102,9 @@ namespace janus
         if (followerProps.term > props.term)
         {
           Log_info("[SAE] LEADER %d discovered higher term from follower %d (%lu > %lu)", props.serverId, site_id, followerProps.term, props.term);
-          // TODO (optimization): Find a better way to step down?
-          // TODO (TEST): STEP DOWN TO FOLLOWER
           *state = 0;
-          *leaderTerm = followerProps.term;
+          // Removing the following line so that the server that stepped down will not be elected as leader again (breaks test 11)
+          // *leaderTerm = followerProps.term;
           return;
         }
         if (followerAppendOK)
