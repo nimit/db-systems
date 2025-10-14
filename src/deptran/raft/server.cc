@@ -1,5 +1,3 @@
-
-
 #include "server.h"
 // #include "paxos_worker.h"
 #include "exec.h"

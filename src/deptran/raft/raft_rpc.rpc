@@ -17,7 +17,7 @@ struct Entry {
 abstract service Raft
 {
   defer RequestVote(ServerProps props | uint64_t voterTerm, bool_t vote_granted);
-  defer AppendEntries(std::vector<Entry> entries, uint64_t prevLogIndex, uint64_t prevLogTerm,  ServerProps props | ServerProps followerProps, bool_t followerAppendOK);
+  defer AppendEntries(std::vector<Entry> entries, uint64_t prevLogIndex, uint64_t prevLogTerm, ServerProps props | 
+                      ServerProps followerProps, bool_t followerAppendOK);
   defer HelloRpc(string req | string res);
 }
-
